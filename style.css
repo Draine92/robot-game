@@ -1,0 +1,31 @@
+body {
+  font-family: Arial, sans-serif;
+  text-align: center;
+  background-color: #111;
+  color: #f5f5f5;
+  margin: 0;
+  padding: 0;
+}
+
+h1 {
+  margin-top: 10px;
+}
+
+canvas {
+  background-color: #222;
+  border: 3px solid #555;
+  display: block;
+  margin: 10px auto;
+}
+
+.hud {
+  display: flex;
+  justify-content: center;
+  gap: 30px;
+  font-size: 18px;
+  margin-bottom: 10px;
+}
+
+#statusMessage {
+  color: #6cff6c;
+}
