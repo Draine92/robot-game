@@ -7,14 +7,18 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  <div class="main-container">
+    <div class="robot-frame">
+      <canvas id="gameCanvas" width="800" height="600"></canvas>
+    </div>
 
-  <div class="controls">
-    <button id="upBtn">⬆️</button>
-    <div class="horizontal-controls">
-      <button id="leftBtn">⬅️</button>
-      <button id="downBtn">⬇️</button>
-      <button id="rightBtn">➡️</button>
+    <div class="control-panel">
+      <button id="upBtn" class="robot-btn">⬆️</button>
+      <div class="horiz-controls">
+        <button id="leftBtn" class="robot-btn">⬅️</button>
+        <button id="downBtn" class="robot-btn">⬇️</button>
+        <button id="rightBtn" class="robot-btn">➡️</button>
+      </div>
     </div>
   </div>
 
