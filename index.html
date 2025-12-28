@@ -2,30 +2,22 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Fix-A-Bot</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Robot Repair Game</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <h1>🤖 Fix-A-Bot</h1>
   <canvas id="gameCanvas" width="800" height="600"></canvas>
 
   <div class="controls">
-    <button onclick="move('up')">⬆️</button>
-    <div>
-      <button onclick="move('left')">⬅️</button>
-      <button onclick="move('down')">⬇️</button>
-      <button onclick="move('right')">➡️</button>
+    <button id="upBtn">⬆️</button>
+    <div class="horizontal-controls">
+      <button id="leftBtn">⬅️</button>
+      <button id="downBtn">⬇️</button>
+      <button id="rightBtn">➡️</button>
     </div>
-  </div>
-
-  <div id="ui">
-    <p>Level: <span id="level">1</span></p>
-    <p>Parts Collected: <span id="parts">0</span></p>
-    <p>Robots Fixed: <span id="fixed">0</span> / <span id="total">0</span></p>
   </div>
 
   <script src="game.js"></script>
 </body>
 </html>
-
