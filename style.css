@@ -2,45 +2,47 @@ html, body {
   margin: 0;
   padding: 0;
   overflow: hidden;
-  height: 100%;
   background: #111;
-  touch-action: none;
   font-family: sans-serif;
+  height: 100%;
+  touch-action: none;
 }
 
 canvas {
   display: block;
-  margin: 0 auto;
-  border: 2px solid #fff;
   background-color: #222;
+  border: 2px solid #fff;
   touch-action: none;
   max-width: 100%;
 }
 
-.controls {
-  text-align: center;
-  margin-top: 10px;
-  user-select: none;
+.game-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  gap: 10px;
 }
 
-.controls button {
+.side-controls {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+}
+
+.side-controls button {
   font-size: 2rem;
-  padding: 10px 20px;
-  margin: 5px;
-  border: none;
+  padding: 15px 20px;
   background-color: #0a74da;
   color: white;
+  border: none;
   border-radius: 10px;
   cursor: pointer;
   touch-action: manipulation;
+  user-select: none;
 }
 
-.controls button:focus {
+.side-controls button:focus {
   outline: none;
-}
-
-.horizontal-controls {
-  display: flex;
-  justify-content: center;
-  gap: 10px;
 }
