@@ -1,138 +1,153 @@
-const canvas = document.getElementById("gameCanvas");
-const ctx = canvas.getContext("2d");
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
 
-const partsCountEl = document.getElementById("partsCount");
-const statusMessage = document.getElementById("statusMessage");
+let level = 1;
+let tileSize = 40;
+let player = { x: 1, y: 1 };
+let parts = [];
+let robots = [];
+let collected = 0;
+let fixed = 0;
+let totalRobots = 0;
+let maze = [];
 
-// ---------------- GAME STATE ----------------
+function generateMaze(width, height) {
+  const maze = Array.from({ length: height }, () =>
+    Array.from({ length: width }, () => 1)
+  );
 
-const player = {
-  x: 50,
-  y: 50,
-  size: 20,
-  speed: 3,
-  parts: 0
-};
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      maze[y][x] = Math.random() > 0.2 ? 0 : 1; // 0 = open, 1 = wall
+    }
+  }
 
-const part = {
-  x: 300,
-  y: 200,
-  size: 14,
-  collected: false
-};
+  maze[1][1] = 0;
+  return maze;
+}
 
-const brokenRobot = {
-  x: 600,
-  y: 350,
-  size: 25,
-  fixed: false,
-  requiredParts: 1
-};
+function placeEntities() {
+  parts = [];
+  robots = [];
+  let count = level + 2;
 
-const keys = {};
+  for (let i = 0; i < count; i++) {
+    let part, robot;
+    do {
+      part = { x: rand(2, 18), y: rand(2, 13) };
+    } while (maze[part.y][part.x] === 1);
+    do {
+      robot = { x: rand(2, 18), y: rand(2, 13), fixed: false };
+    } while (maze[robot.y][robot.x] === 1 || (robot.x === part.x && robot.y === part.y));
 
-// ---------------- INPUT ----------------
+    parts.push(part);
+    robots.push(robot);
+  }
 
-window.addEventListener("keydown", (e) => {
-  keys[e.key] = true;
-});
+  collected = 0;
+  fixed = 0;
+  totalRobots = count;
+  updateUI();
+}
 
-window.addEventListener("keyup", (e) => {
-  keys[e.key] = false;
-});
-
-// ---------------- GAME LOOP ----------------
-
-function update() {
-  movePlayer();
-  checkCollisions();
+function rand(min, max) {
+  return Math.floor(Math.random() * (max - min)) + min;
 }
 
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let y = 0; y < maze.length; y++) {
+    for (let x = 0; x < maze[y].length; x++) {
+      if (maze[y][x] === 1) {
+        ctx.fillStyle = '#555';
+        ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
+      }
+    }
+  }
 
-  drawPlayer();
-  drawPart();
-  drawBrokenRobot();
+  for (let part of parts) {
+    ctx.fillStyle = 'yellow';
+    ctx.beginPath();
+    ctx.arc(part.x * tileSize + 20, part.y * tileSize + 20, 10, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  for (let robot of robots) {
+    ctx.fillStyle = robot.fixed ? 'green' : 'red';
+    ctx.fillRect(robot.x * tileSize + 10, robot.y * tileSize + 10, 20, 20);
+  }
+
+  ctx.fillStyle = 'cyan';
+  ctx.fillRect(player.x * tileSize + 5, player.y * tileSize + 5, 30, 30);
 }
 
-function gameLoop() {
-  update();
-  draw();
-  requestAnimationFrame(gameLoop);
-}
+function move(direction) {
+  let dx = 0, dy = 0;
+  if (direction === 'left') dx = -1;
+  if (direction === 'right') dx = 1;
+  if (direction === 'up') dy = -1;
+  if (direction === 'down') dy = 1;
 
-// ---------------- LOGIC ----------------
+  let newX = player.x + dx;
+  let newY = player.y + dy;
 
-function movePlayer() {
-  if (keys["ArrowUp"] || keys["w"]) player.y -= player.speed;
-  if (keys["ArrowDown"] || keys["s"]) player.y += player.speed;
-  if (keys["ArrowLeft"] || keys["a"]) player.x -= player.speed;
-  if (keys["ArrowRight"] || keys["d"]) player.x += player.speed;
-
-  // Keep inside canvas
-  player.x = Math.max(0, Math.min(canvas.width - player.size, player.x));
-  player.y = Math.max(0, Math.min(canvas.height - player.size, player.y));
+  if (maze[newY][newX] === 0) {
+    player.x = newX;
+    player.y = newY;
+    checkCollisions();
+    draw();
+  }
 }
 
 function checkCollisions() {
-  // Collect part
-  if (!part.collected && isColliding(player, part)) {
-    part.collected = true;
-    player.parts += 1;
-    partsCountEl.textContent = player.parts;
-    statusMessage.textContent = "Picked up a robot part!";
-  }
+  // Pick up parts
+  parts = parts.filter(part => {
+    if (part.x === player.x && part.y === player.y) {
+      collected++;
+      updateUI();
+      return false;
+    }
+    return true;
+  });
 
-  // Fix robot
-  if (!brokenRobot.fixed && isColliding(player, brokenRobot)) {
-    if (player.parts >= brokenRobot.requiredParts) {
-      brokenRobot.fixed = true;
-      player.parts -= brokenRobot.requiredParts;
-      partsCountEl.textContent = player.parts;
-      statusMessage.textContent = "Robot repaired! 🤖✨";
-    } else {
-      statusMessage.textContent = "This robot needs a part!";
+  // Fix robots
+  for (let robot of robots) {
+    if (!robot.fixed && robot.x === player.x && robot.y === player.y && collected > 0) {
+      robot.fixed = true;
+      fixed++;
+      collected--;
+      updateUI();
     }
   }
-}
 
-function isColliding(a, b) {
-  return (
-    a.x < b.x + b.size &&
-    a.x + a.size > b.x &&
-    a.y < b.y + b.size &&
-    a.y + a.size > b.y
-  );
-}
-
-// ---------------- DRAWING ----------------
-
-function drawPlayer() {
-  ctx.fillStyle = "#4fc3f7";
-  ctx.fillRect(player.x, player.y, player.size, player.size);
-  ctx.fillStyle = "#fff";
-  ctx.fillText("🚀", player.x - 2, player.y + 18);
-}
-
-function drawPart() {
-  if (part.collected) return;
-  ctx.fillStyle = "#ffeb3b";
-  ctx.fillRect(part.x, part.y, part.size, part.size);
-  ctx.fillText("🧩", part.x - 2, part.y + 14);
-}
-
-function drawBrokenRobot() {
-  if (brokenRobot.fixed) {
-    ctx.fillStyle = "#6cff6c";
-    ctx.fillRect(brokenRobot.x, brokenRobot.y, brokenRobot.size, brokenRobot.size);
-    ctx.fillText("🤖", brokenRobot.x - 4, brokenRobot.y + 22);
-  } else {
-    ctx.fillStyle = "#ff6b6b";
-    ctx.fillRect(brokenRobot.x, brokenRobot.y, brokenRobot.size, brokenRobot.size);
-    ctx.fillText("⚡", brokenRobot.x, brokenRobot.y + 20);
+  if (fixed === totalRobots) {
+    setTimeout(() => {
+      level++;
+      startLevel();
+    }, 500);
   }
 }
 
-// ---------------- START ----------------
-gameLoop();
+function updateUI() {
+  document.getElementById('level').innerText = level;
+  document.getElementById('parts').innerText = collected;
+  document.getElementById('fixed').innerText = fixed;
+  document.getElementById('total').innerText = totalRobots;
+}
+
+function startLevel() {
+  maze = generateMaze(20, 15);
+  player = { x: 1, y: 1 };
+  placeEntities();
+  draw();
+}
+
+// Keyboard controls
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowLeft') move('left');
+  if (e.key === 'ArrowRight') move('right');
+  if (e.key === 'ArrowUp') move('up');
+  if (e.key === 'ArrowDown') move('down');
+});
+
+startLevel();
