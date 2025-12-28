@@ -2,22 +2,30 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FixBots: Rescue Protocol</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Fix-A-Bot</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <h1>🤖 Fix-A-Bot</h1>
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
 
-  <h1>🤖 FixBots: Rescue Protocol</h1>
-  <p>Fly around, collect parts, and fix broken robots!</p>
+  <div class="controls">
+    <button onclick="move('up')">⬆️</button>
+    <div>
+      <button onclick="move('left')">⬅️</button>
+      <button onclick="move('down')">⬇️</button>
+      <button onclick="move('right')">➡️</button>
+    </div>
+  </div>
 
-  <canvas id="gameCanvas" width="800" height="500"></canvas>
-
-  <div class="hud">
-    <span>🧩 Parts Collected: <strong id="partsCount">0</strong></span>
-    <span id="statusMessage"></span>
+  <div id="ui">
+    <p>Level: <span id="level">1</span></p>
+    <p>Parts Collected: <span id="parts">0</span></p>
+    <p>Robots Fixed: <span id="fixed">0</span> / <span id="total">0</span></p>
   </div>
 
   <script src="game.js"></script>
 </body>
 </html>
+
