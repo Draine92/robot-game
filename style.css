@@ -3,46 +3,65 @@ html, body {
   padding: 0;
   overflow: hidden;
   background: #111;
-  font-family: sans-serif;
-  height: 100%;
-  touch-action: none;
+  font-family: 'Orbitron', sans-serif;
+  height: 100vh;
 }
 
 canvas {
   display: block;
   background-color: #222;
-  border: 2px solid #fff;
-  touch-action: none;
-  max-width: 100%;
+  border: 6px solid #0ff;
+  box-shadow: 0 0 20px #0ff, inset 0 0 10px #0ff;
+  border-radius: 20px;
 }
 
-.game-wrapper {
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500&display=swap');
+
+.main-container {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
   height: 100vh;
-  gap: 10px;
+  padding: 20px;
+  gap: 40px;
 }
 
-.side-controls {
+.robot-frame {
+  padding: 20px;
+  border: 8px groove #0ff;
+  background: linear-gradient(to bottom, #222, #111);
+  border-radius: 30px;
+  box-shadow: 0 0 25px #0ff, inset 0 0 15px #0ff;
+}
+
+.control-panel {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 10px;
+  align-items: center;
+  gap: 20px;
 }
 
-.side-controls button {
+.horiz-controls {
+  display: flex;
+  gap: 20px;
+}
+
+.robot-btn {
+  background: linear-gradient(to bottom, #0ff, #0aa);
+  border: 3px solid #088;
+  color: #000;
   font-size: 2rem;
-  padding: 15px 20px;
-  background-color: #0a74da;
-  color: white;
-  border: none;
-  border-radius: 10px;
+  border-radius: 15px;
+  padding: 20px;
+  box-shadow: 0 0 10px #0ff;
+  font-family: 'Orbitron', sans-serif;
   cursor: pointer;
   touch-action: manipulation;
   user-select: none;
+  transition: transform 0.1s ease;
 }
 
-.side-controls button:focus {
-  outline: none;
+.robot-btn:active {
+  transform: scale(0.95);
+  box-shadow: 0 0 5px #0ff inset;
 }
