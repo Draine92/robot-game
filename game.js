@@ -1217,11 +1217,18 @@
     if (audioUnlocked) return;
     audioUnlocked = true;
 
-    // 1. Speak a silent utterance to unlock speech synthesis
+    // 1. Speak a real (very short, near-silent) word to unlock speech synthesis.
+    // iOS sometimes ignores whitespace-only utterances, so we use "hi" at volume 0.
     try {
-      const u = new SpeechSynthesisUtterance(' ');
+      // Cancel anything queued from a failed previous attempt
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance('hi');
       u.volume = 0;
-      u.rate = 10;
+      u.rate = 1;
+      // Attach a voice if we have one already loaded
+      const v = getVoice();
+      if (v) u.voice = v;
+      u.lang = 'en-US';
       window.speechSynthesis.speak(u);
     } catch (e) {}
 
@@ -1234,6 +1241,28 @@
         audioCtx.resume();
       }
     } catch (e) {}
+  }
+
+  // Wait for at least one English voice to be loaded before allowing speech.
+  // iOS Safari often returns an empty voices array initially.
+  function waitForVoices(timeoutMs = 2000) {
+    return new Promise((resolve) => {
+      const start = Date.now();
+      function check() {
+        const voices = window.speechSynthesis.getVoices();
+        if (voices && voices.length > 0) {
+          availableVoices = voices;
+          resolve(voices);
+          return;
+        }
+        if (Date.now() - start > timeoutMs) {
+          resolve([]);
+          return;
+        }
+        setTimeout(check, 100);
+      }
+      check();
+    });
   }
 
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1424,14 +1453,19 @@
     return availableVoices.find(v => v.lang.startsWith('en')) || availableVoices[0];
   }
 
-  function speak(text) {
+  async function speak(text) {
     if (!('speechSynthesis' in window)) return;
     // iOS won't speak anything until audio has been unlocked by a user gesture.
-    // If we haven't been unlocked yet, just show the text and skip audio.
     if (IS_IOS && !audioUnlocked) {
       setRobotState('idle');
       setStatus('idle', 'Tap the button to enable voice');
       return;
+    }
+
+    // On iOS, wait for voices to be loaded before speaking — they load async
+    // and the array may be empty initially.
+    if (availableVoices.length === 0) {
+      await waitForVoices(2000);
     }
 
     window.speechSynthesis.cancel();  // stop any current speech
@@ -1451,6 +1485,8 @@
     for (const chunk of chunks) {
       if (!chunk.trim()) continue;
       const u = new SpeechSynthesisUtterance(chunk);
+      // Setting voice on iOS is finicky — only set if we found one.
+      // If voice is null on iOS, iOS uses the system default which usually works.
       if (voice) u.voice = voice;
       u.rate = rate;
       u.pitch = 1.0;
@@ -1465,7 +1501,8 @@
           setStatus('idle', 'Ready');
         }
       };
-      u.onerror = () => {
+      u.onerror = (e) => {
+        console.warn('Speech utterance error:', e.error || e);
         queued--;
         if (queued <= 0) {
           currentUtterance = null;
@@ -1623,11 +1660,29 @@
 
     // Push-to-talk button
     const btn = $('talk-btn');
+    let hasUnlocked = false;
     const press = (e) => {
       e.preventDefault();
       // CRITICAL: Unlock audio on first user gesture so iOS allows
       // both speechSynthesis and AudioContext to play.
+      const wasFirstTap = !audioUnlocked;
       unlockAudio();
+
+      // On iOS, the very first tap should just unlock audio and play the
+      // spoken greeting — NOT start recording yet. Otherwise the unlock
+      // doesn't have time to take effect and audio stays silent.
+      if (IS_IOS && wasFirstTap) {
+        hasUnlocked = true;
+        // Wait briefly for voices to load, then speak the greeting
+        setTimeout(async () => {
+          await waitForVoices(1500);
+          const greeting = `Hi! I am ${memory.name}. Hold the button and ask me anything.`;
+          showResponse(greeting);
+          speak(greeting);
+        }, 100);
+        return;
+      }
+
       // If robot is speaking, interrupt it
       if (currentUtterance || window.speechSynthesis.speaking) {
         stopSpeaking();
@@ -1637,6 +1692,12 @@
     };
     const release = (e) => {
       e.preventDefault();
+      // On iOS, the first tap is just the audio-unlock. Don't try to stop
+      // recording because we never started it.
+      if (IS_IOS && hasUnlocked && !isRecording) {
+        hasUnlocked = false;
+        return;
+      }
       btn.classList.remove('active');
       stopRecording();
     };
@@ -1694,7 +1755,12 @@
     // Greet on load. On iOS, audio is locked until the user taps,
     // so we show a text-only greeting and let the first tap unlock voice.
     setTimeout(() => {
-      const greeting = `Hi! I am ${memory.name}. ${IS_IOS ? 'Tap the button to talk to me.' : 'Hold the button and ask me anything.'}`;
+      let greeting;
+      if (IS_IOS) {
+        greeting = `Hi! I am ${memory.name}. Tap the button once to wake me up.`;
+      } else {
+        greeting = `Hi! I am ${memory.name}. Hold the button and ask me anything.`;
+      }
       showResponse(greeting);
       if (!IS_IOS) speak(greeting);
     }, 600);
