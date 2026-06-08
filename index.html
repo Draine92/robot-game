@@ -3,21 +3,107 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Robot Repair Maze</title>
+  <meta name="theme-color" content="#0a0e27" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Robot Brain" />
+  <title>Robot Brain</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700;9..144,900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="main-container">
-    <div class="robot-frame">
-      <canvas id="gameCanvas" width="800" height="600"></canvas>
-    </div>
+  <div class="grain"></div>
 
-    <div class="control-panel">
-      <button id="upBtn" class="robot-btn">⬆️</button>
-      <div class="horiz-controls">
-        <button id="leftBtn" class="robot-btn">⬅️</button>
-        <button id="downBtn" class="robot-btn">⬇️</button>
-        <button id="rightBtn" class="robot-btn">➡️</button>
+  <div class="app">
+    <header class="top-bar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <span class="brand-name" id="brand-name">ROBOT BRAIN</span>
+      </div>
+      <button class="settings-btn" id="settings-btn" aria-label="Settings">⚙</button>
+    </header>
+
+    <main class="stage">
+      <div class="robot" id="robot">
+        <div class="robot-antenna"></div>
+        <div class="robot-head">
+          <div class="robot-screen">
+            <div class="robot-eye left" id="eye-left"></div>
+            <div class="robot-eye right" id="eye-right"></div>
+            <div class="robot-mouth" id="robot-mouth">
+              <span></span><span></span><span></span><span></span><span></span>
+            </div>
+          </div>
+          <div class="robot-ear left"></div>
+          <div class="robot-ear right"></div>
+        </div>
+      </div>
+
+      <div class="status-pill" id="status-pill">
+        <span class="status-dot"></span>
+        <span class="status-text" id="status-text">Ready</span>
+      </div>
+
+      <div class="transcript" id="transcript">
+        <div class="bubble user" id="bubble-user" hidden>
+          <div class="bubble-label">YOU SAID</div>
+          <div class="bubble-text" id="heard-text">—</div>
+        </div>
+        <div class="bubble robot" id="bubble-robot" hidden>
+          <div class="bubble-label">ROBOT</div>
+          <div class="bubble-text" id="response-text">—</div>
+        </div>
+      </div>
+    </main>
+
+    <footer class="controls">
+      <button class="talk-btn" id="talk-btn" aria-label="Hold to talk">
+        <div class="talk-btn-ring"></div>
+        <div class="talk-btn-ring delay"></div>
+        <div class="talk-btn-core">
+          <svg viewBox="0 0 24 24" width="48" height="48" aria-hidden="true">
+            <path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/>
+          </svg>
+        </div>
+      </button>
+      <p class="hint" id="hint-text">Hold the button. Talk. Release when done.</p>
+    </footer>
+  </div>
+
+  <!-- Settings panel -->
+  <div class="settings-panel" id="settings-panel" hidden>
+    <div class="settings-card">
+      <div class="settings-head">
+        <h2>Settings</h2>
+        <button class="close-btn" id="close-settings" aria-label="Close">✕</button>
+      </div>
+      <div class="settings-body">
+        <label class="field">
+          <span>Robot's name</span>
+          <input type="text" id="robot-name-input" maxlength="20" />
+        </label>
+        <label class="field">
+          <span>Voice</span>
+          <select id="voice-select"></select>
+        </label>
+        <label class="field">
+          <span>Speech speed</span>
+          <input type="range" id="speech-rate" min="0.7" max="1.5" step="0.1" value="1.0" />
+        </label>
+        <div class="field">
+          <span>What I remember about you</span>
+          <ul class="memory-list" id="memory-list"></ul>
+          <button class="danger-btn" id="forget-all-btn">Forget everything about me</button>
+        </div>
+        <div class="field">
+          <span>Sound effects</span>
+          <label class="toggle">
+            <input type="checkbox" id="sfx-toggle" checked />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
       </div>
     </div>
   </div>
