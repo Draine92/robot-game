@@ -1214,25 +1214,11 @@
   let audioUnlocked = false;
 
   function unlockAudio() {
-    if (audioUnlocked) return;
+    // We mark unlocked BEFORE the speak call so subsequent calls aren't blocked
+    if (audioUnlocked) return false;
     audioUnlocked = true;
 
-    // 1. Speak a real (very short, near-silent) word to unlock speech synthesis.
-    // iOS sometimes ignores whitespace-only utterances, so we use "hi" at volume 0.
-    try {
-      // Cancel anything queued from a failed previous attempt
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance('hi');
-      u.volume = 0;
-      u.rate = 1;
-      // Attach a voice if we have one already loaded
-      const v = getVoice();
-      if (v) u.voice = v;
-      u.lang = 'en-US';
-      window.speechSynthesis.speak(u);
-    } catch (e) {}
-
-    // 2. Resume audio context (needed for sound effects)
+    // 1. Resume audio context (needed for sound effects)
     try {
       if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1241,6 +1227,7 @@
         audioCtx.resume();
       }
     } catch (e) {}
+    return true; // we did the unlock
   }
 
   // Wait for at least one English voice to be loaded before allowing speech.
@@ -1275,35 +1262,41 @@
   function buildRecognition() {
     if (!SpeechRecognition) return null;
     const r = new SpeechRecognition();
-    // iOS works better with continuous=true and interimResults=true.
-    // The user is the one controlling start/stop via the button, so we
-    // don't need single-shot mode.
-    r.continuous = true;
+    // continuous=true works on desktop Chrome. On iOS Safari, recognition
+    // auto-stops after a few seconds regardless of this flag.
+    r.continuous = !IS_IOS;
     r.interimResults = true;
     r.lang = 'en-US';
     r.maxAlternatives = 1;
 
     r.onresult = (event) => {
-      let finalChunk = '';
+      let sessionFinal = '';
       let interim = '';
-      // Collect all results from this session, not just the latest
+      // Collect results from this event, not the cumulative session
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const res = event.results[i];
         if (res.isFinal) {
-          finalChunk += res[0].transcript;
+          sessionFinal += res[0].transcript;
         } else {
           interim += res[0].transcript;
         }
       }
-      if (finalChunk) {
-        // Append to the accumulated final transcript
-        recordedTranscript = (recordedTranscript + ' ' + finalChunk).trim();
+
+      // Append a final chunk only if it isn't already a substring of what
+      // we have. iOS often reports the same phrase twice across restarts.
+      if (sessionFinal.trim()) {
+        const normalized = sessionFinal.trim().toLowerCase();
+        if (!recordedTranscript.toLowerCase().includes(normalized)) {
+          recordedTranscript = (recordedTranscript + ' ' + sessionFinal.trim()).trim();
+        }
       }
-      interimTranscript = interim;
-      // Show interim as the user speaks so they get feedback
-      if (interim && isRecording) {
+      interimTranscript = interim.trim();
+
+      // Show live what we're hearing
+      if (isRecording) {
         $('bubble-user').hidden = false;
-        $('heard-text').textContent = (recordedTranscript + ' ' + interim).trim();
+        const display = (recordedTranscript + ' ' + interim).trim() || '...';
+        $('heard-text').textContent = display;
         $('bubble-robot').hidden = true;
       }
     };
@@ -1316,28 +1309,28 @@
         setStatus('error', 'Mic permission denied');
         showHint('Please allow microphone access in browser settings, then reload.');
       } else if (event.error === 'no-speech' || event.error === 'aborted') {
-        // These are normal — iOS auto-stops; just let onend handle it
+        // Normal — let onend handle it
       } else if (event.error === 'network') {
         setStatus('error', 'Network issue');
-        showHint('Speech recognition needs internet. Check your connection.');
+        showHint('Speech recognition needs internet.');
       }
     };
 
     r.onend = () => {
-      // iOS Safari auto-stops recognition after a few seconds of silence,
-      // even with continuous=true. If the user is still holding the button,
-      // restart it so we keep listening.
+      // On iOS, recognition auto-stops every few seconds. If the user is
+      // still holding the button, restart for another round.
       if (isRecording && recognitionShouldRestart) {
-        try {
-          recognition.start();
-        } catch (e) {
-          // Already started or in a bad state — wait and try again
-          setTimeout(() => {
-            if (isRecording) {
-              try { recognition.start(); } catch (e2) {}
-            }
-          }, 100);
-        }
+        setTimeout(() => {
+          if (!isRecording) return;
+          try {
+            recognition.start();
+          } catch (e) {
+            // Already started or in a bad state
+            try { recognition.abort(); } catch (e2) {}
+            recognition = buildRecognition();
+            try { recognition.start(); } catch (e3) {}
+          }
+        }, 50);
       } else {
         finishRecording();
       }
@@ -1453,19 +1446,13 @@
     return availableVoices.find(v => v.lang.startsWith('en')) || availableVoices[0];
   }
 
-  async function speak(text) {
+  function speak(text) {
     if (!('speechSynthesis' in window)) return;
     // iOS won't speak anything until audio has been unlocked by a user gesture.
     if (IS_IOS && !audioUnlocked) {
       setRobotState('idle');
       setStatus('idle', 'Tap the button to enable voice');
       return;
-    }
-
-    // On iOS, wait for voices to be loaded before speaking — they load async
-    // and the array may be empty initially.
-    if (availableVoices.length === 0) {
-      await waitForVoices(2000);
     }
 
     window.speechSynthesis.cancel();  // stop any current speech
@@ -1486,7 +1473,6 @@
       if (!chunk.trim()) continue;
       const u = new SpeechSynthesisUtterance(chunk);
       // Setting voice on iOS is finicky — only set if we found one.
-      // If voice is null on iOS, iOS uses the system default which usually works.
       if (voice) u.voice = voice;
       u.rate = rate;
       u.pitch = 1.0;
@@ -1663,23 +1649,40 @@
     let hasUnlocked = false;
     const press = (e) => {
       e.preventDefault();
-      // CRITICAL: Unlock audio on first user gesture so iOS allows
-      // both speechSynthesis and AudioContext to play.
-      const wasFirstTap = !audioUnlocked;
-      unlockAudio();
+      // CRITICAL on iOS: speechSynthesis.speak() must be called SYNCHRONOUSLY
+      // inside the user gesture handler the very first time. No setTimeout,
+      // no await — call it right here, right now.
+      const didUnlock = unlockAudio();
 
-      // On iOS, the very first tap should just unlock audio and play the
-      // spoken greeting — NOT start recording yet. Otherwise the unlock
-      // doesn't have time to take effect and audio stays silent.
-      if (IS_IOS && wasFirstTap) {
+      if (IS_IOS && didUnlock) {
+        // First tap on iOS — fire an audible greeting synchronously inside
+        // this gesture so iOS authorizes future speech.
         hasUnlocked = true;
-        // Wait briefly for voices to load, then speak the greeting
-        setTimeout(async () => {
-          await waitForVoices(1500);
-          const greeting = `Hi! I am ${memory.name}. Hold the button and ask me anything.`;
-          showResponse(greeting);
-          speak(greeting);
-        }, 100);
+        const greeting = `Hi! I am ${memory.name}. Hold the button and ask me anything.`;
+        showResponse(greeting);
+        // Speak synchronously — DO NOT await or setTimeout
+        try {
+          window.speechSynthesis.cancel();
+          const u = new SpeechSynthesisUtterance(greeting);
+          u.rate = settings.rate || 1.0;
+          u.volume = 1.0;
+          u.lang = 'en-US';
+          const v = getVoice();
+          if (v) u.voice = v;
+          setRobotState('speaking');
+          setStatus('speaking', 'Speaking...');
+          u.onend = () => {
+            setRobotState('idle');
+            setStatus('idle', 'Ready');
+          };
+          u.onerror = () => {
+            setRobotState('idle');
+            setStatus('idle', 'Ready');
+          };
+          window.speechSynthesis.speak(u);
+        } catch (err) {
+          console.warn('Initial speak failed:', err);
+        }
         return;
       }
 
@@ -1692,8 +1695,8 @@
     };
     const release = (e) => {
       e.preventDefault();
-      // On iOS, the first tap is just the audio-unlock. Don't try to stop
-      // recording because we never started it.
+      // On iOS, the first tap is just the audio-unlock greeting. Don't try
+      // to stop recording because we never started it.
       if (IS_IOS && hasUnlocked && !isRecording) {
         hasUnlocked = false;
         return;
