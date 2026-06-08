@@ -1201,57 +1201,154 @@
   }
 
   // ============================================================
-  // BROWSER SPEECH (Web Speech API)
+  // BROWSER SPEECH (Web Speech API) — with iOS-specific handling
   // ============================================================
+
+  // iOS Safari has many quirks for both speech recognition and synthesis.
+  // We detect iOS so we can apply workarounds.
+  const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.userAgent.includes('Mac') && navigator.maxTouchPoints > 1);
+
+  // Audio unlock flag: iOS blocks speechSynthesis and AudioContext until
+  // they're activated inside a user gesture. We do this on first button tap.
+  let audioUnlocked = false;
+
+  function unlockAudio() {
+    if (audioUnlocked) return;
+    audioUnlocked = true;
+
+    // 1. Speak a silent utterance to unlock speech synthesis
+    try {
+      const u = new SpeechSynthesisUtterance(' ');
+      u.volume = 0;
+      u.rate = 10;
+      window.speechSynthesis.speak(u);
+    } catch (e) {}
+
+    // 2. Resume audio context (needed for sound effects)
+    try {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+    } catch (e) {}
+  }
 
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   let recognition = null;
   let isRecording = false;
   let recordedTranscript = '';
+  let interimTranscript = '';
+  let recognitionShouldRestart = false;
+
+  function buildRecognition() {
+    if (!SpeechRecognition) return null;
+    const r = new SpeechRecognition();
+    // iOS works better with continuous=true and interimResults=true.
+    // The user is the one controlling start/stop via the button, so we
+    // don't need single-shot mode.
+    r.continuous = true;
+    r.interimResults = true;
+    r.lang = 'en-US';
+    r.maxAlternatives = 1;
+
+    r.onresult = (event) => {
+      let finalChunk = '';
+      let interim = '';
+      // Collect all results from this session, not just the latest
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const res = event.results[i];
+        if (res.isFinal) {
+          finalChunk += res[0].transcript;
+        } else {
+          interim += res[0].transcript;
+        }
+      }
+      if (finalChunk) {
+        // Append to the accumulated final transcript
+        recordedTranscript = (recordedTranscript + ' ' + finalChunk).trim();
+      }
+      interimTranscript = interim;
+      // Show interim as the user speaks so they get feedback
+      if (interim && isRecording) {
+        $('bubble-user').hidden = false;
+        $('heard-text').textContent = (recordedTranscript + ' ' + interim).trim();
+        $('bubble-robot').hidden = true;
+      }
+    };
+
+    r.onerror = (event) => {
+      console.warn('Recognition error:', event.error);
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        isRecording = false;
+        recognitionShouldRestart = false;
+        setStatus('error', 'Mic permission denied');
+        showHint('Please allow microphone access in browser settings, then reload.');
+      } else if (event.error === 'no-speech' || event.error === 'aborted') {
+        // These are normal — iOS auto-stops; just let onend handle it
+      } else if (event.error === 'network') {
+        setStatus('error', 'Network issue');
+        showHint('Speech recognition needs internet. Check your connection.');
+      }
+    };
+
+    r.onend = () => {
+      // iOS Safari auto-stops recognition after a few seconds of silence,
+      // even with continuous=true. If the user is still holding the button,
+      // restart it so we keep listening.
+      if (isRecording && recognitionShouldRestart) {
+        try {
+          recognition.start();
+        } catch (e) {
+          // Already started or in a bad state — wait and try again
+          setTimeout(() => {
+            if (isRecording) {
+              try { recognition.start(); } catch (e2) {}
+            }
+          }, 100);
+        }
+      } else {
+        finishRecording();
+      }
+    };
+
+    return r;
+  }
 
   function initRecognition() {
     if (!SpeechRecognition) {
       setStatus('error', 'Browser does not support speech');
+      showHint('Try Safari (iOS) or Chrome (desktop).');
       return false;
     }
-    recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = 'en-US';
-    recognition.maxAlternatives = 1;
-
-    recognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      recordedTranscript = transcript;
-    };
-    recognition.onerror = (event) => {
-      if (event.error === 'no-speech') {
-        recordedTranscript = '';
-      } else if (event.error === 'not-allowed') {
-        setStatus('error', 'Mic access denied');
-        showHint('Please allow microphone access in your browser settings.');
-      } else {
-        console.error('Speech error:', event.error);
-      }
-    };
-    recognition.onend = () => {
-      if (isRecording) {
-        // Recognition ended on its own; restart if we're still holding
-        try { recognition.start(); } catch (e) {}
-      } else {
-        // Recording was stopped intentionally — process whatever we got
-        finishRecording();
-      }
-    };
-    return true;
+    recognition = buildRecognition();
+    return recognition !== null;
   }
 
   function startRecording() {
     if (!recognition) return;
     recordedTranscript = '';
+    interimTranscript = '';
     isRecording = true;
-    try { recognition.start(); }
-    catch (e) { /* already started */ }
+    recognitionShouldRestart = true;
+
+    // On iOS, recognition can get into a bad state after errors.
+    // Rebuild it if start fails the first time.
+    try {
+      recognition.start();
+    } catch (e) {
+      // Already started — stop it and create a fresh instance
+      try { recognition.abort(); } catch (e2) {}
+      recognition = buildRecognition();
+      try { recognition.start(); } catch (e3) {
+        console.error('Could not start recognition:', e3);
+        isRecording = false;
+        setStatus('error', 'Mic error - try again');
+        return;
+      }
+    }
     setStatus('listening', 'Listening...');
     setRobotState('listening');
     if (settings.sfx) playBeep(880, 0.08);
@@ -1260,21 +1357,31 @@
   function stopRecording() {
     if (!recognition) return;
     isRecording = false;
+    recognitionShouldRestart = false;
+    // Capture any pending interim as final
+    if (interimTranscript && !recordedTranscript) {
+      recordedTranscript = interimTranscript;
+    }
     try { recognition.stop(); }
-    catch (e) { finishRecording(); }
+    catch (e) {
+      try { recognition.abort(); } catch (e2) {}
+      finishRecording();
+    }
   }
 
   async function finishRecording() {
-    if (!recordedTranscript) {
+    const transcript = recordedTranscript || interimTranscript;
+    if (!transcript || !transcript.trim()) {
       setStatus('idle', 'Ready');
       setRobotState('idle');
+      showHint('Try again — I did not hear anything.');
       return;
     }
     setStatus('thinking', 'Thinking...');
     setRobotState('thinking');
-    showHeard(recordedTranscript);
+    showHeard(transcript.trim());
 
-    const response = await processCommand(recordedTranscript);
+    const response = await processCommand(transcript.trim());
     showResponse(response);
     if (settings.sfx) playBeep(660, 0.05);
     speak(response);
@@ -1319,30 +1426,89 @@
 
   function speak(text) {
     if (!('speechSynthesis' in window)) return;
+    // iOS won't speak anything until audio has been unlocked by a user gesture.
+    // If we haven't been unlocked yet, just show the text and skip audio.
+    if (IS_IOS && !audioUnlocked) {
+      setRobotState('idle');
+      setStatus('idle', 'Tap the button to enable voice');
+      return;
+    }
+
     window.speechSynthesis.cancel();  // stop any current speech
 
-    const u = new SpeechSynthesisUtterance(text);
-    const v = getVoice();
-    if (v) u.voice = v;
-    u.rate = settings.rate || 1.0;
-    u.pitch = 1.0;
+    // iOS speechSynthesis has a known bug: long text gets cut off after ~15s.
+    // We chunk by sentence so each utterance is short.
+    const chunks = IS_IOS ? chunkForIOS(text) : [text];
+    const voice = getVoice();
+    const rate = settings.rate || 1.0;
 
     setRobotState('speaking');
     setStatus('speaking', 'Speaking...');
 
-    u.onend = () => {
-      currentUtterance = null;
-      setRobotState('idle');
-      setStatus('idle', 'Ready');
-    };
-    u.onerror = () => {
-      currentUtterance = null;
-      setRobotState('idle');
-      setStatus('idle', 'Ready');
-    };
+    let queued = chunks.length;
+    let lastUtterance = null;
 
-    currentUtterance = u;
-    window.speechSynthesis.speak(u);
+    for (const chunk of chunks) {
+      if (!chunk.trim()) continue;
+      const u = new SpeechSynthesisUtterance(chunk);
+      if (voice) u.voice = voice;
+      u.rate = rate;
+      u.pitch = 1.0;
+      u.volume = 1.0;
+      u.lang = 'en-US';
+
+      u.onend = () => {
+        queued--;
+        if (queued <= 0) {
+          currentUtterance = null;
+          setRobotState('idle');
+          setStatus('idle', 'Ready');
+        }
+      };
+      u.onerror = () => {
+        queued--;
+        if (queued <= 0) {
+          currentUtterance = null;
+          setRobotState('idle');
+          setStatus('idle', 'Ready');
+        }
+      };
+
+      lastUtterance = u;
+      window.speechSynthesis.speak(u);
+    }
+
+    currentUtterance = lastUtterance;
+
+    // iOS bug workaround: speechSynthesis can silently get into a paused
+    // state. Periodically resume() during a long utterance.
+    if (IS_IOS) {
+      const interval = setInterval(() => {
+        if (!window.speechSynthesis.speaking) {
+          clearInterval(interval);
+        } else {
+          window.speechSynthesis.pause();
+          window.speechSynthesis.resume();
+        }
+      }, 4000);
+    }
+  }
+
+  function chunkForIOS(text) {
+    // Split on sentence boundaries, but keep chunks under ~180 chars to be safe
+    const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
+    const chunks = [];
+    let current = '';
+    for (const s of sentences) {
+      if ((current + s).length > 180 && current) {
+        chunks.push(current.trim());
+        current = s;
+      } else {
+        current += s;
+      }
+    }
+    if (current.trim()) chunks.push(current.trim());
+    return chunks;
   }
 
   function stopSpeaking() {
@@ -1459,6 +1625,9 @@
     const btn = $('talk-btn');
     const press = (e) => {
       e.preventDefault();
+      // CRITICAL: Unlock audio on first user gesture so iOS allows
+      // both speechSynthesis and AudioContext to play.
+      unlockAudio();
       // If robot is speaking, interrupt it
       if (currentUtterance || window.speechSynthesis.speaking) {
         stopSpeaking();
@@ -1522,11 +1691,12 @@
       }
     });
 
-    // Greet on load
+    // Greet on load. On iOS, audio is locked until the user taps,
+    // so we show a text-only greeting and let the first tap unlock voice.
     setTimeout(() => {
-      const greeting = `Hi! I am ${memory.name}. Hold the button and ask me anything.`;
+      const greeting = `Hi! I am ${memory.name}. ${IS_IOS ? 'Tap the button to talk to me.' : 'Hold the button and ask me anything.'}`;
       showResponse(greeting);
-      speak(greeting);
+      if (!IS_IOS) speak(greeting);
     }, 600);
   }
 
