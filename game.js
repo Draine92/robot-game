@@ -1214,7 +1214,6 @@
   let audioUnlocked = false;
 
   function unlockAudio() {
-    // We mark unlocked BEFORE the speak call so subsequent calls aren't blocked
     if (audioUnlocked) return false;
     audioUnlocked = true;
 
@@ -1227,7 +1226,20 @@
         audioCtx.resume();
       }
     } catch (e) {}
-    return true; // we did the unlock
+
+    // 2. Play a silent buffer through Web Audio. This is the most reliable
+    // iOS audio-unlock trick — used by Howler.js, ResponsiveVoice, and others.
+    try {
+      if (audioCtx) {
+        const buffer = audioCtx.createBuffer(1, 1, 22050);
+        const source = audioCtx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioCtx.destination);
+        source.start(0);
+      }
+    } catch (e) {}
+
+    return true;
   }
 
   // Wait for at least one English voice to be loaded before allowing speech.
@@ -1644,23 +1656,22 @@
       window.speechSynthesis.onvoiceschanged = loadVoices;
     }
 
-    // Push-to-talk button
-    const btn = $('talk-btn');
-    let hasUnlocked = false;
-    const press = (e) => {
-      e.preventDefault();
-      // CRITICAL on iOS: speechSynthesis.speak() must be called SYNCHRONOUSLY
-      // inside the user gesture handler the very first time. No setTimeout,
-      // no await — call it right here, right now.
-      const didUnlock = unlockAudio();
+    // iOS-specific unlock overlay. Show on iOS, hide on everything else.
+    // The unlock button uses a 'click' event (not touchstart), which is
+    // what iOS reliably accepts as a valid audio-unlock gesture.
+    const overlay = $('ios-unlock');
+    if (IS_IOS) {
+      overlay.hidden = false;
+      const unlockBtn = $('ios-unlock-btn');
+      unlockBtn.addEventListener('click', (e) => {
+        e.preventDefault();
 
-      if (IS_IOS && didUnlock) {
-        // First tap on iOS — fire an audible greeting synchronously inside
-        // this gesture so iOS authorizes future speech.
-        hasUnlocked = true;
+        // Unlock audio context + play silent buffer
+        unlockAudio();
+
+        // Speak the greeting SYNCHRONOUSLY inside this click handler.
+        // This is what iOS requires to authorize future speechSynthesis calls.
         const greeting = `Hi! I am ${memory.name}. Hold the button and ask me anything.`;
-        showResponse(greeting);
-        // Speak synchronously — DO NOT await or setTimeout
         try {
           window.speechSynthesis.cancel();
           const u = new SpeechSynthesisUtterance(greeting);
@@ -1669,22 +1680,25 @@
           u.lang = 'en-US';
           const v = getVoice();
           if (v) u.voice = v;
-          setRobotState('speaking');
-          setStatus('speaking', 'Speaking...');
-          u.onend = () => {
-            setRobotState('idle');
-            setStatus('idle', 'Ready');
-          };
-          u.onerror = () => {
-            setRobotState('idle');
-            setStatus('idle', 'Ready');
-          };
           window.speechSynthesis.speak(u);
         } catch (err) {
           console.warn('Initial speak failed:', err);
         }
-        return;
-      }
+
+        // Hide the overlay so the main app is usable
+        overlay.hidden = true;
+        showResponse(greeting);
+      });
+    } else {
+      overlay.hidden = true;
+    }
+
+    // Push-to-talk button
+    const btn = $('talk-btn');
+    const press = (e) => {
+      e.preventDefault();
+      // Make sure audio is unlocked (no-op if already done by the overlay)
+      unlockAudio();
 
       // If robot is speaking, interrupt it
       if (currentUtterance || window.speechSynthesis.speaking) {
@@ -1695,12 +1709,6 @@
     };
     const release = (e) => {
       e.preventDefault();
-      // On iOS, the first tap is just the audio-unlock greeting. Don't try
-      // to stop recording because we never started it.
-      if (IS_IOS && hasUnlocked && !isRecording) {
-        hasUnlocked = false;
-        return;
-      }
       btn.classList.remove('active');
       stopRecording();
     };
@@ -1755,18 +1763,14 @@
       }
     });
 
-    // Greet on load. On iOS, audio is locked until the user taps,
-    // so we show a text-only greeting and let the first tap unlock voice.
-    setTimeout(() => {
-      let greeting;
-      if (IS_IOS) {
-        greeting = `Hi! I am ${memory.name}. Tap the button once to wake me up.`;
-      } else {
-        greeting = `Hi! I am ${memory.name}. Hold the button and ask me anything.`;
-      }
-      showResponse(greeting);
-      if (!IS_IOS) speak(greeting);
-    }, 600);
+    // Greet on load (desktop only — iOS handles greeting through the unlock overlay)
+    if (!IS_IOS) {
+      setTimeout(() => {
+        const greeting = `Hi! I am ${memory.name}. Hold the button and ask me anything.`;
+        showResponse(greeting);
+        speak(greeting);
+      }, 600);
+    }
   }
 
   if (document.readyState === 'loading') {
