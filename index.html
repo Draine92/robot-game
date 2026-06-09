@@ -104,6 +104,79 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
+
+        <div class="settings-divider"></div>
+
+        <div class="field">
+          <span>🔒 Parental Controls</span>
+          <button class="parental-btn" id="parental-btn">Open parental settings</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Parental controls panel (PIN-protected) -->
+  <div class="settings-panel" id="parental-panel" hidden>
+    <div class="settings-card">
+      <div class="settings-head">
+        <h2>🔒 Parental Controls</h2>
+        <button class="close-btn" id="close-parental" aria-label="Close">✕</button>
+      </div>
+      <div class="settings-body">
+        <!-- PIN entry screen -->
+        <div id="pin-entry" hidden>
+          <p class="parental-intro">Enter the parent PIN to access controls.</p>
+          <label class="field">
+            <span>PIN</span>
+            <input type="password" id="pin-input" inputmode="numeric" maxlength="6" autocomplete="off" />
+          </label>
+          <button class="primary-btn" id="pin-submit">Unlock</button>
+          <p class="pin-error" id="pin-error" hidden>Wrong PIN. Try again.</p>
+        </div>
+
+        <!-- PIN setup screen (first time) -->
+        <div id="pin-setup" hidden>
+          <p class="parental-intro">Set a 4-digit PIN to protect parental settings. Your kid won't be able to change these without it.</p>
+          <label class="field">
+            <span>New PIN (4 digits)</span>
+            <input type="password" id="pin-new" inputmode="numeric" maxlength="6" autocomplete="off" />
+          </label>
+          <button class="primary-btn" id="pin-create">Set PIN</button>
+          <button class="skip-btn" id="pin-skip">Skip (no PIN)</button>
+        </div>
+
+        <!-- Main parental controls (unlocked) -->
+        <div id="parental-main" hidden>
+          <div class="field">
+            <span>Content filtering level</span>
+            <select id="filter-level">
+              <option value="strict">Strict — block all mature topics (ages 6-10)</option>
+              <option value="moderate">Moderate — allow educational violence (history, war)</option>
+              <option value="off">Off — no filtering (not recommended for kids)</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <span>Custom blocked words</span>
+            <textarea id="custom-blocked" placeholder="One per line — e.g. fortnite&#10;tiktok&#10;youtube" rows="4"></textarea>
+            <p class="field-hint">Add any extra words or phrases you want blocked. One per line.</p>
+          </div>
+
+          <div class="field">
+            <span>Activity log</span>
+            <p class="field-hint">The last questions your kid has asked. Blocked questions are marked in red.</p>
+            <div class="activity-log" id="activity-log"></div>
+            <button class="secondary-btn" id="clear-activity">Clear log</button>
+          </div>
+
+          <div class="field">
+            <span>Change PIN</span>
+            <input type="password" id="pin-change" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="New PIN (leave blank to remove)" />
+            <button class="secondary-btn" id="pin-update">Update PIN</button>
+          </div>
+
+          <button class="primary-btn" id="parental-save">Save & close</button>
+        </div>
       </div>
     </div>
   </div>

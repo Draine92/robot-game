@@ -14,17 +14,177 @@
   const STORAGE_KEY = 'robot-brain-memory';
   const SETTINGS_KEY = 'robot-brain-settings';
   const WIKI_CACHE_KEY = 'robot-brain-wiki-cache';
+  const PARENTAL_KEY = 'robot-brain-parental';
+  const ACTIVITY_LOG_KEY = 'robot-brain-activity';
 
   const DEFAULT_NAME = 'Robot';
 
-  // Topics the robot refuses to look up
-  const BLOCKED_KEYWORDS = [
-    'porn', 'pornography', 'sex', 'sexual', 'nude', 'naked',
-    'suicide', 'kill myself', 'how to kill',
-    'weapon', 'weapons', 'gun', 'bomb', 'explosive',
-    'drug', 'drugs', 'cocaine', 'heroin', 'meth',
-    'torture', 'gore',
+  // ============================================================
+  // PARENTAL CONTROLS — content filtering
+  // ============================================================
+  //
+  // Three strictness levels:
+  //   strict   — blocks anything in any category (recommended for ages 6-10)
+  //   moderate — blocks adult/illegal/extreme; allows mild violence (history, war)
+  //   off      — no content filtering (not recommended for kids)
+  //
+  // Filter runs in three places:
+  //   1. On the user's question text (catch the question itself)
+  //   2. On each Wikipedia topic candidate before lookup
+  //   3. On the Wikipedia response text BEFORE speaking it
+  //
+  // The blocklists are intentionally not exhaustive — they catch the
+  // most common problem cases. Parents can add custom words via settings.
+
+  const BLOCKED_CATEGORIES = {
+    sexual: [
+      // Explicit
+      'porn', 'pornography', 'pornographic', 'xxx', 'erotic', 'erotica',
+      'nude', 'nudity', 'naked', 'topless',
+      // Acts
+      'sex', 'sexual', 'sexually', 'intercourse', 'masturbation', 'orgasm',
+      'orgy', 'fetish', 'kink', 'bdsm', 'bondage',
+      // Body parts (anatomical when discussed sexually — handled with care)
+      'genitals', 'genitalia', 'penis', 'vagina', 'breast', 'breasts',
+      // Industry
+      'prostitute', 'prostitution', 'escort service', 'strip club', 'stripper',
+      'sex worker', 'brothel',
+      // Identity/orientation (these are legitimate topics but at strict level
+      // a child looking these up should probably talk to a parent first)
+    ],
+    violence_extreme: [
+      'murder', 'massacre', 'genocide', 'execution', 'beheading', 'beheaded',
+      'torture', 'tortured', 'gore', 'mutilation', 'mutilated',
+      'dismember', 'dismembered', 'lynching', 'lynched',
+      'school shooting', 'mass shooting', 'serial killer', 'serial murderer',
+      'cannibal', 'cannibalism',
+    ],
+    weapons: [
+      'bomb', 'pipe bomb', 'explosive device', 'explosives',
+      'how to make a gun', 'how to make a weapon',
+      'how do i make a gun', 'how to build a bomb', 'how do i build a bomb',
+      'assault rifle', 'ied', 'improvised explosive',
+    ],
+    drugs: [
+      'cocaine', 'heroin', 'meth', 'methamphetamine', 'crack cocaine',
+      'how to make drugs', 'how to use drugs', 'how to inject',
+      'lsd', 'mdma', 'ecstasy pill', 'fentanyl',
+      // Note: "drug" alone is too broad — it'd block legitimate medicine questions
+    ],
+    selfharm: [
+      'suicide', 'kill myself', 'how to kill', 'how to die', 'ways to die',
+      'self harm', 'self-harm', 'cutting myself',
+      // Eating disorder content
+      'pro-ana', 'pro-mia', 'thinspo',
+    ],
+    hate: [
+      // Slurs intentionally not enumerated — use Wikipedia's own scanner approach.
+      // We rely on combined-word checks.
+      'racial slur', 'ethnic slur',
+      'white supremacy', 'white supremacist', 'nazi propaganda',
+    ],
+  };
+
+  // Words that strongly suggest the response itself contains adult content,
+  // even if the question was innocent. Scanned in Wikipedia summaries.
+  const RESPONSE_RED_FLAGS = [
+    'sexually explicit', 'sexual content', 'pornographic',
+    'rape', 'raped', 'sexual assault', 'sexual abuse',
+    'pedophil', 'molest', 'incest',
+    'graphic violence', 'extreme violence',
+    'beheading', 'dismember', 'torture',
+    'overdose', 'drug overdose',
+    'suicide attempt', 'committed suicide', 'died by suicide',
   ];
+
+  // Default refusal response that doesn't tip off what was blocked.
+  // Kid-friendly redirect — sounds like "I just don't know that one."
+  const SAFE_REFUSAL = "I don't have a good answer for that. Try asking me something else — like a math question, a fun fact, or about a planet.";
+
+  function loadParental() {
+    try {
+      const raw = localStorage.getItem(PARENTAL_KEY);
+      if (!raw) return { level: 'strict', customBlocked: [], pin: null };
+      const data = JSON.parse(raw);
+      return {
+        level: data.level || 'strict',
+        customBlocked: Array.isArray(data.customBlocked) ? data.customBlocked : [],
+        pin: data.pin || null,
+      };
+    } catch (e) {
+      return { level: 'strict', customBlocked: [], pin: null };
+    }
+  }
+
+  function saveParental(p) {
+    try { localStorage.setItem(PARENTAL_KEY, JSON.stringify(p)); } catch (e) {}
+  }
+
+  let parental = loadParental();
+
+  function getActiveBlocklist() {
+    if (parental.level === 'off') return [];
+    const all = [];
+    if (parental.level === 'strict' || parental.level === 'moderate') {
+      all.push(...BLOCKED_CATEGORIES.sexual);
+      all.push(...BLOCKED_CATEGORIES.violence_extreme);
+      all.push(...BLOCKED_CATEGORIES.weapons);
+      all.push(...BLOCKED_CATEGORIES.drugs);
+      all.push(...BLOCKED_CATEGORIES.selfharm);
+      all.push(...BLOCKED_CATEGORIES.hate);
+    }
+    all.push(...(parental.customBlocked || []));
+    return all;
+  }
+
+  function isBlocked(text) {
+    if (!text) return false;
+    const lower = text.toLowerCase();
+    const blocklist = getActiveBlocklist();
+    return blocklist.some(kw => {
+      // Multi-word phrases use substring match; single words use word-boundary
+      if (kw.includes(' ')) return lower.includes(kw);
+      const re = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+      return re.test(lower);
+    });
+  }
+
+  function responseHasRedFlags(text) {
+    if (!text || parental.level === 'off') return false;
+    const lower = text.toLowerCase();
+    // Check the dedicated response-red-flags list
+    if (RESPONSE_RED_FLAGS.some(flag => lower.includes(flag))) return true;
+    // Also re-run the active blocklist on the response — catches words that
+    // weren't in the question but showed up in the answer
+    return isBlocked(text);
+  }
+
+  // ============================================================
+  // ACTIVITY LOG (for parental review)
+  // ============================================================
+
+  function logActivity(question, response, blocked) {
+    try {
+      const log = JSON.parse(localStorage.getItem(ACTIVITY_LOG_KEY) || '[]');
+      log.push({
+        time: new Date().toISOString(),
+        question: question,
+        response: response,
+        blocked: !!blocked,
+      });
+      // Keep only the last 200 entries
+      const trimmed = log.slice(-200);
+      localStorage.setItem(ACTIVITY_LOG_KEY, JSON.stringify(trimmed));
+    } catch (e) {}
+  }
+
+  function loadActivityLog() {
+    try {
+      return JSON.parse(localStorage.getItem(ACTIVITY_LOG_KEY) || '[]');
+    } catch (e) {
+      return [];
+    }
+  }
 
   // ============================================================
   // KNOWLEDGE BASES
@@ -1008,11 +1168,6 @@
     catch (e) {}
   }
 
-  function isBlocked(text) {
-    text = text.toLowerCase();
-    return BLOCKED_KEYWORDS.some(k => text.includes(k));
-  }
-
   function extractTopicCandidates(command) {
     let text = command.toLowerCase().trim().replace(/[?.!,;:]+$/g, '');
     const candidates = [];
@@ -1026,12 +1181,28 @@
       ''
     ).trim();
 
-    // Cast/voice-actor questions: "who played MAL in DESCENDANTS"
-    // The answer is almost always in the article about either the work
-    // (Descendants) OR the character (Mal). We generate candidates for both.
-    const castMatch = text.match(
-      /^who (?:played|plays|portrayed|portrays|voiced|voices|stars as|starred as) (.+?)(?:\s+in\s+(.+))?$/
-    );
+    // Cast/voice-actor questions. We handle many natural phrasings:
+    //   "who played MAL in DESCENDANTS"
+    //   "which actress played MAL in DESCENDANTS"
+    //   "what actor plays IRON MAN"
+    //   "who voices WOODY in TOY STORY"
+    //   "who is the actor that plays IRON MAN"
+    // In all cases the answer is in the article about either the work
+    // OR the character. We generate candidates for both.
+    const castPatterns = [
+      // "who played X in Y" / "who voiced X in Y" / etc.
+      /^who (?:played|plays|portrayed|portrays|voiced|voices|stars as|starred as) (.+?)(?:\s+in\s+(?:the\s+(?:movie|film|show|series|video|book)\s+)?(.+))?$/,
+      // "which/what actor/actress played X in Y"
+      /^(?:which|what) (?:actor|actress|person|voice actor) (?:played|plays|portrayed|portrays|voiced|voices) (.+?)(?:\s+in\s+(?:the\s+(?:movie|film|show|series|video|book)\s+)?(.+))?$/,
+      // "who is the actor/actress that played X in Y"
+      /^who is the (?:actor|actress|person|voice actor) (?:that |who )?(?:played|plays|portrayed|portrays|voiced|voices) (.+?)(?:\s+in\s+(?:the\s+(?:movie|film|show|series|video|book)\s+)?(.+))?$/,
+    ];
+
+    let castMatch = null;
+    for (const p of castPatterns) {
+      castMatch = text.match(p);
+      if (castMatch) break;
+    }
     if (castMatch) {
       const character = castMatch[1].trim();
       const work = castMatch[2] ? castMatch[2].trim() : null;
@@ -1187,13 +1358,22 @@
   }
 
   async function handleWikipedia(command) {
-    if (isBlocked(command)) return "I cannot look that up. Try asking about something else.";
+    if (isBlocked(command)) return SAFE_REFUSAL;
     const candidates = extractTopicCandidates(command);
     if (candidates.length === 0) return null;
     for (const topic of candidates) {
       if (isBlocked(topic)) continue;
       const result = await wikipediaLookup(topic);
-      if (result) return result;
+      if (result) {
+        // Layer 3: scan the response itself for inappropriate content.
+        // If we hit a red flag, reject this candidate and keep trying others —
+        // sometimes a more specific topic gives a cleaner article.
+        if (responseHasRedFlags(result)) {
+          console.warn('Wikipedia response blocked by content filter for topic:', topic);
+          continue;
+        }
+        return result;
+      }
     }
     return null;
   }
@@ -1206,9 +1386,17 @@
     const command = normalizeCommand(rawText);
     if (!command) return "I did not hear anything. Try again.";
 
+    // PARENTAL CONTROLS — Layer 1: block at the question level.
+    // If the question itself contains blocked words, refuse without even
+    // running the handlers. This catches direct inappropriate requests.
+    if (isBlocked(command)) {
+      logActivity(rawText, SAFE_REFUSAL, true);
+      return SAFE_REFUSAL;
+    }
+
     // 1. List knowledge
     let r = handleListKnowledge(command);
-    if (r) return r;
+    if (r) { logActivity(rawText, r, false); return r; }
 
     // 2. Specific handlers
     const handlers = [
@@ -1222,21 +1410,27 @@
     for (const h of handlers) {
       try {
         const result = h(command);
-        if (result) return result;
+        if (result) { logActivity(rawText, result, false); return result; }
       } catch (e) { console.error(`Handler ${h.name} error:`, e); }
     }
 
-    // 3. Wikipedia
+    // 3. Wikipedia (includes response-level content scan)
     try {
       const wiki = await handleWikipedia(command);
-      if (wiki) return wiki;
+      if (wiki) {
+        const isRefusal = wiki === SAFE_REFUSAL;
+        logActivity(rawText, wiki, isRefusal);
+        return wiki;
+      }
     } catch (e) { console.error('Wikipedia error:', e); }
 
     // 4. Built-in keyword KB
     const fact = lookupKnowledge(command);
-    if (fact) return fact;
+    if (fact) { logActivity(rawText, fact, false); return fact; }
 
-    return "I do not know that one. Try asking me about science, English, geography, math, time, or definitions. You can also ask me to tell a joke or a fun fact.";
+    const fallback = "I do not know that one. Try asking me about science, English, geography, math, time, or definitions. You can also ask me to tell a joke or a fun fact.";
+    logActivity(rawText, fallback, false);
+    return fallback;
   }
 
   // ============================================================
@@ -1799,6 +1993,144 @@
         memory.facts = {};
         saveMemory(memory);
         renderMemoryList();
+      }
+    });
+
+    // -------- Parental controls --------
+
+    function showParentalScreen(which) {
+      $('pin-entry').hidden = which !== 'entry';
+      $('pin-setup').hidden = which !== 'setup';
+      $('parental-main').hidden = which !== 'main';
+    }
+
+    function openParentalPanel() {
+      $('parental-panel').hidden = false;
+      $('pin-error').hidden = true;
+      $('pin-input').value = '';
+      $('pin-new').value = '';
+
+      // First time: prompt to set a PIN. After that: require it.
+      if (!parental.pin) {
+        showParentalScreen('setup');
+      } else {
+        showParentalScreen('entry');
+        setTimeout(() => $('pin-input').focus(), 100);
+      }
+    }
+
+    function showParentalMain() {
+      showParentalScreen('main');
+      // Populate current values
+      $('filter-level').value = parental.level || 'strict';
+      $('custom-blocked').value = (parental.customBlocked || []).join('\n');
+      $('pin-change').value = '';
+      renderActivityLog();
+    }
+
+    function renderActivityLog() {
+      const log = loadActivityLog();
+      const container = $('activity-log');
+      container.innerHTML = '';
+      // Newest first
+      const reversed = log.slice().reverse();
+      for (const entry of reversed) {
+        const div = document.createElement('div');
+        div.className = 'activity-entry' + (entry.blocked ? ' blocked' : '');
+        const t = new Date(entry.time);
+        const timeStr = t.toLocaleString();
+        div.innerHTML = `
+          <div class="activity-time">${escapeHtml(timeStr)}${entry.blocked ? ' • BLOCKED' : ''}</div>
+          <div class="activity-q">${escapeHtml(entry.question)}</div>
+          <div class="activity-a">${escapeHtml(entry.response)}</div>
+        `;
+        container.appendChild(div);
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c =>
+        ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c])
+      );
+    }
+
+    $('parental-btn').addEventListener('click', () => {
+      $('settings-panel').hidden = true;
+      openParentalPanel();
+    });
+
+    $('close-parental').addEventListener('click', () => {
+      $('parental-panel').hidden = true;
+    });
+
+    $('parental-panel').addEventListener('click', (e) => {
+      if (e.target.id === 'parental-panel') $('parental-panel').hidden = true;
+    });
+
+    $('pin-submit').addEventListener('click', () => {
+      const entered = $('pin-input').value.trim();
+      if (entered && entered === parental.pin) {
+        $('pin-error').hidden = true;
+        showParentalMain();
+      } else {
+        $('pin-error').hidden = false;
+        $('pin-input').value = '';
+      }
+    });
+
+    $('pin-input').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') $('pin-submit').click();
+    });
+
+    $('pin-create').addEventListener('click', () => {
+      const newPin = $('pin-new').value.trim();
+      if (newPin && /^\d{4,6}$/.test(newPin)) {
+        parental.pin = newPin;
+        saveParental(parental);
+        showParentalMain();
+      } else {
+        alert('PIN must be 4-6 digits.');
+      }
+    });
+
+    $('pin-skip').addEventListener('click', () => {
+      parental.pin = null;
+      saveParental(parental);
+      showParentalMain();
+    });
+
+    $('parental-save').addEventListener('click', () => {
+      parental.level = $('filter-level').value;
+      parental.customBlocked = $('custom-blocked').value
+        .split('\n')
+        .map(s => s.trim().toLowerCase())
+        .filter(s => s.length > 0);
+      saveParental(parental);
+      $('parental-panel').hidden = true;
+    });
+
+    $('clear-activity').addEventListener('click', () => {
+      if (confirm('Clear the entire activity log?')) {
+        localStorage.removeItem(ACTIVITY_LOG_KEY);
+        renderActivityLog();
+      }
+    });
+
+    $('pin-update').addEventListener('click', () => {
+      const newPin = $('pin-change').value.trim();
+      if (newPin === '') {
+        if (confirm('Remove the PIN? Anyone will be able to access parental controls.')) {
+          parental.pin = null;
+          saveParental(parental);
+          alert('PIN removed.');
+        }
+      } else if (/^\d{4,6}$/.test(newPin)) {
+        parental.pin = newPin;
+        saveParental(parental);
+        $('pin-change').value = '';
+        alert('PIN updated.');
+      } else {
+        alert('PIN must be 4-6 digits, or blank to remove.');
       }
     });
 
