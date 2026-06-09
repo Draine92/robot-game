@@ -540,14 +540,15 @@
   function loadMemory() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return { name: DEFAULT_NAME, facts: {} };
+      if (!raw) return { name: DEFAULT_NAME, facts: {}, customResponses: {} };
       const data = JSON.parse(raw);
       return {
         name: data.name || DEFAULT_NAME,
         facts: data.facts || {},
+        customResponses: data.customResponses || {},
       };
     } catch (e) {
-      return { name: DEFAULT_NAME, facts: {} };
+      return { name: DEFAULT_NAME, facts: {}, customResponses: {} };
     }
   }
 
@@ -1066,6 +1067,83 @@
     return null;
   }
 
+  // ---------- Custom triggers (e.g. "when I say X, you say Y") ----------
+  //
+  // This is the "program the robot" mode. Kid says:
+  //   "Remember when I say BARKING DOG you say BARK BARK"
+  // and from then on, saying "BARKING DOG" makes the robot reply "BARK BARK".
+  //
+  // Stored in memory.customResponses { trigger: response }.
+
+  function handleCustomTeach(command) {
+    let text = command.replace(/[?.!,;:]+$/g, '');
+    text = stripLeadingFillers(text);
+
+    const patterns = [
+      // "remember when I say X, you say Y"
+      /^remember (?:that )?when (?:i|we) say (.+?),?\s+you (?:say|respond with) (.+)$/,
+      // "when I say X, you say Y" (no leading "remember")
+      /^when (?:i|we) say (.+?),?\s+you (?:say|respond with) (.+)$/,
+      // "if I say X you say Y"
+      /^(?:remember )?(?:that )?if (?:i|we) say (.+?),?\s+(?:you )?(?:say|respond with) (.+)$/,
+    ];
+
+    for (const p of patterns) {
+      const m = text.match(p);
+      if (!m) continue;
+      const trigger = m[1].trim().toLowerCase();
+      const response = m[2].trim();
+      if (!trigger || !response) continue;
+      if (trigger.length > 80 || response.length > 200) continue;
+      memory.customResponses[trigger] = response;
+      saveMemory(memory);
+      return `Got it. When you say ${trigger}, I will say ${response}.`;
+    }
+    return null;
+  }
+
+  function handleCustomTrigger(command) {
+    // Check if the command matches any custom trigger the kid has taught.
+    // Match against the FULL command (case-insensitive). Both exact and
+    // contained-substring matches are allowed.
+    const text = command.toLowerCase().trim().replace(/[?.!,;:]+$/g, '');
+    const customs = memory.customResponses || {};
+
+    // Try exact match first
+    if (text in customs) return customs[text];
+
+    // Then try: command exactly equals a trigger (after stripping fillers)
+    const stripped = stripLeadingFillers(text);
+    if (stripped in customs) return customs[stripped];
+
+    // Then try: trigger appears anywhere in the command, with word boundaries
+    // (so "barking dog" matches "barking dog" but doesn't trigger on "I love
+    // talking about dogs"). We sort longer triggers first so more specific
+    // ones win.
+    const triggers = Object.keys(customs).sort((a, b) => b.length - a.length);
+    for (const trigger of triggers) {
+      const re = new RegExp(`\\b${trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+      if (re.test(text)) return customs[trigger];
+    }
+    return null;
+  }
+
+  function handleCustomForget(command) {
+    let text = command.replace(/[?.!,;:]+$/g, '');
+    text = stripLeadingFillers(text);
+    const m = text.match(/^forget (?:that )?(?:when (?:i|we) say )?(.+?)(?:\s+you (?:say|respond)).*$/) ||
+              text.match(/^forget (?:the )?(?:trigger |response (?:for |to ))?(.+)$/);
+    if (m) {
+      const trigger = m[1].trim().toLowerCase();
+      if (trigger in (memory.customResponses || {})) {
+        delete memory.customResponses[trigger];
+        saveMemory(memory);
+        return `Okay, I forgot about ${trigger}.`;
+      }
+    }
+    return null;
+  }
+
   function handleRecall(command) {
     let text = command.replace(/[?.!,;:]+$/g, '');
     text = stripLeadingFillers(text);
@@ -1209,20 +1287,32 @@
 
       if (work) {
         // Prefer looking up the WORK first — its article lists the cast
-        candidates.push(work);
         const workNoArticle = work.replace(/^(?:a |an |the )/, '').trim();
-        if (workNoArticle !== work) candidates.push(workNoArticle);
         const workNoCategory = work.replace(CATEGORY_RE, '').trim();
+
+        // Try the most-specific Wikipedia article naming first:
+        // "Descendants (film)", "Descendants (2015 film)" — these resolve
+        // unambiguously even when "Descendants" alone is a disambiguation page.
+        candidates.push(`${workNoCategory || workNoArticle || work} (film)`);
+        candidates.push(`${workNoCategory || workNoArticle || work} (TV series)`);
+        candidates.push(`${workNoCategory || workNoArticle || work} (Disney film)`);
+
+        // Then plain forms
+        candidates.push(work);
+        if (workNoArticle !== work) candidates.push(workNoArticle);
         if (workNoCategory !== work && !candidates.includes(workNoCategory)) {
           candidates.push(workNoCategory);
         }
-        // Then the character + work together (e.g. "Mal (Descendants)")
+
+        // Then the character + work disambiguation
         candidates.push(`${character} (${workNoCategory || work})`);
-        // Then just the character name as a last resort
-        candidates.push(character);
+        // Then just the character name — but ONLY if it's reasonably specific
+        // (more than 3 chars and not a common dictionary word). Short names
+        // like "Mal" alone produce terrible Wikipedia results.
+        if (character.length >= 4) candidates.push(character);
       } else {
         // No work specified — just look up the character
-        candidates.push(character);
+        if (character.length >= 4) candidates.push(character);
       }
     }
 
@@ -1357,19 +1447,69 @@
     }
   }
 
+  function isResponseRelevant(response, topic) {
+    // The response should actually mention the topic. Wikipedia's API
+    // sometimes returns unrelated articles for short or ambiguous queries
+    // (e.g. "mal" -> a random Methodist tract). Require the topic words
+    // to appear somewhere in the response.
+    if (!response || !topic) return false;
+    const lowerResp = response.toLowerCase();
+    const lowerTopic = topic.toLowerCase().trim();
+
+    // Strip disambiguation suffix: "mal (descendants)" -> "mal"
+    const cleanTopic = lowerTopic.replace(/\s*\(.+?\)\s*$/, '').trim();
+
+    // Direct substring match — Wikipedia article about X almost always
+    // contains the word X within the first few sentences
+    if (lowerResp.includes(cleanTopic)) return true;
+
+    // For multi-word topics, require at least the FIRST WORD to appear
+    const firstWord = cleanTopic.split(/\s+/)[0];
+    if (firstWord.length >= 4 && lowerResp.includes(firstWord)) return true;
+
+    return false;
+  }
+
+  function isTopicRiskyToLookup(topic) {
+    // Skip topics that are too short or generic — these reliably produce
+    // bad Wikipedia results.
+    const t = topic.trim().toLowerCase();
+    if (t.length < 3) return true;
+    // Single short words are dicey unless they're proper nouns we can detect
+    const words = t.split(/\s+/);
+    if (words.length === 1 && t.length < 4) return true;
+    // Common English words that lead to weird Wikipedia results
+    const COMMON_WORDS = new Set([
+      'the', 'a', 'an', 'is', 'are', 'was', 'were', 'this', 'that', 'these',
+      'those', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
+      'can', 'could', 'should', 'may', 'might', 'thing', 'things', 'stuff',
+    ]);
+    if (words.length === 1 && COMMON_WORDS.has(t)) return true;
+    return false;
+  }
+
   async function handleWikipedia(command) {
     if (isBlocked(command)) return SAFE_REFUSAL;
     const candidates = extractTopicCandidates(command);
     if (candidates.length === 0) return null;
     for (const topic of candidates) {
       if (isBlocked(topic)) continue;
+      if (isTopicRiskyToLookup(topic)) {
+        console.log('Skipping risky topic:', topic);
+        continue;
+      }
       const result = await wikipediaLookup(topic);
       if (result) {
-        // Layer 3: scan the response itself for inappropriate content.
-        // If we hit a red flag, reject this candidate and keep trying others —
-        // sometimes a more specific topic gives a cleaner article.
+        // Filter A: scan response for inappropriate content
         if (responseHasRedFlags(result)) {
-          console.warn('Wikipedia response blocked by content filter for topic:', topic);
+          console.warn('Wikipedia response blocked by content filter:', topic);
+          continue;
+        }
+        // Filter B: reject responses that aren't about the topic we asked for.
+        // Catches the Wikipedia API returning unrelated articles for short
+        // or ambiguous queries.
+        if (!isResponseRelevant(result, topic)) {
+          console.warn('Wikipedia response not relevant to topic:', topic);
           continue;
         }
         return result;
@@ -1387,18 +1527,37 @@
     if (!command) return "I did not hear anything. Try again.";
 
     // PARENTAL CONTROLS — Layer 1: block at the question level.
-    // If the question itself contains blocked words, refuse without even
-    // running the handlers. This catches direct inappropriate requests.
     if (isBlocked(command)) {
       logActivity(rawText, SAFE_REFUSAL, true);
       return SAFE_REFUSAL;
     }
 
-    // 1. List knowledge
+    // 1. Custom teach — "remember when I say X, you say Y". Highest priority
+    // so this can't be intercepted by other handlers.
+    try {
+      const taught = handleCustomTeach(command);
+      if (taught) { logActivity(rawText, taught, false); return taught; }
+    } catch (e) { console.error('handleCustomTeach error:', e); }
+
+    // 2. Custom forget
+    try {
+      const forgotten = handleCustomForget(command);
+      if (forgotten) { logActivity(rawText, forgotten, false); return forgotten; }
+    } catch (e) { console.error('handleCustomForget error:', e); }
+
+    // 3. Custom trigger lookup — anything the kid has taught wins over
+    // built-in responses. This is what makes "barking dog" -> "bark bark"
+    // override the built-in fact about dogs.
+    try {
+      const custom = handleCustomTrigger(command);
+      if (custom) { logActivity(rawText, custom, false); return custom; }
+    } catch (e) { console.error('handleCustomTrigger error:', e); }
+
+    // 4. List knowledge
     let r = handleListKnowledge(command);
     if (r) { logActivity(rawText, r, false); return r; }
 
-    // 2. Specific handlers
+    // 5. Specific handlers
     const handlers = [
       handleMath, handleSpelling, handleDefinition,
       handleSynonym, handleAntonym, handleConversions,
@@ -1414,7 +1573,7 @@
       } catch (e) { console.error(`Handler ${h.name} error:`, e); }
     }
 
-    // 3. Wikipedia (includes response-level content scan)
+    // 6. Wikipedia (includes response-level content scan)
     try {
       const wiki = await handleWikipedia(command);
       if (wiki) {
@@ -1424,7 +1583,7 @@
       }
     } catch (e) { console.error('Wikipedia error:', e); }
 
-    // 4. Built-in keyword KB
+    // 7. Built-in keyword KB
     const fact = lookupKnowledge(command);
     if (fact) { logActivity(rawText, fact, false); return fact; }
 
