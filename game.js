@@ -1014,44 +1014,83 @@
   }
 
   function extractTopicCandidates(command) {
-    const text = command.toLowerCase().trim().replace(/[?.!,;:]+$/g, '');
+    let text = command.toLowerCase().trim().replace(/[?.!,;:]+$/g, '');
     const candidates = [];
     const CATEGORY_RE = /^(?:the |a |an )?(?:book series|book|series|novel|movie|film|song|album|show|tv show|game|video game|video|band|company|country|city|state|planet|president|king|queen|story|poem|play|musical|opera|painting|sculpture|building|monument|river|mountain|ocean|sea|continent)\s+/i;
 
-    const patterns = [
-      /^who (?:is|was|were|are) (.+)$/,
-      /^what (?:is|was|are|were) (?:a |an |the )?(.+)$/,
-      /^tell me about (.+)$/,
-      /^do you know (?:about |who |what )?(.+)$/,
-      /^how (?:does|do|big|small|tall|long|fast) (?:a |an |the |is |are )?(.+)$/,
-      /^why (?:does|do|is|are|did) (.+)$/,
-      /^where (?:is|are|was|were) (.+)$/,
-      /^when (?:was|is|did) (.+)$/,
-      /^explain (?:to me )?(.+)$/,
-      /^who (?:wrote|invented|made|created|discovered|founded|painted|composed|directed|starred in) (.+)$/,
-    ];
+    // Strip "on PLATFORM" mentions — kids often say things like "in Descendants
+    // on Disney Plus" or "in Stranger Things on Netflix." The platform isn't
+    // part of the title, so we drop it before pattern matching.
+    text = text.replace(
+      /\s+on\s+(?:disney plus|disney\+|netflix|hulu|amazon prime|amazon|hbo max|hbo|max|apple tv\+?|apple tv|paramount\+?|paramount|peacock|youtube|prime video|prime)\b.*$/i,
+      ''
+    ).trim();
 
-    for (const p of patterns) {
-      const m = text.match(p);
-      if (m) {
-        let raw = m[1].trim().replace(/\s*\b(please|to me|for me)\b\s*$/g, '').trim();
-        if (!raw) continue;
-        candidates.push(raw);
+    // Cast/voice-actor questions: "who played MAL in DESCENDANTS"
+    // The answer is almost always in the article about either the work
+    // (Descendants) OR the character (Mal). We generate candidates for both.
+    const castMatch = text.match(
+      /^who (?:played|plays|portrayed|portrays|voiced|voices|stars as|starred as) (.+?)(?:\s+in\s+(.+))?$/
+    );
+    if (castMatch) {
+      const character = castMatch[1].trim();
+      const work = castMatch[2] ? castMatch[2].trim() : null;
 
-        const stripped = raw.replace(/^(?:a |an |the )/, '').trim();
-        if (stripped && stripped !== raw) candidates.push(stripped);
-
-        const noCategory = raw.replace(CATEGORY_RE, '').trim();
-        if (noCategory && noCategory !== raw && !candidates.includes(noCategory)) {
-          candidates.push(noCategory);
+      if (work) {
+        // Prefer looking up the WORK first — its article lists the cast
+        candidates.push(work);
+        const workNoArticle = work.replace(/^(?:a |an |the )/, '').trim();
+        if (workNoArticle !== work) candidates.push(workNoArticle);
+        const workNoCategory = work.replace(CATEGORY_RE, '').trim();
+        if (workNoCategory !== work && !candidates.includes(workNoCategory)) {
+          candidates.push(workNoCategory);
         }
+        // Then the character + work together (e.g. "Mal (Descendants)")
+        candidates.push(`${character} (${workNoCategory || work})`);
+        // Then just the character name as a last resort
+        candidates.push(character);
+      } else {
+        // No work specified — just look up the character
+        candidates.push(character);
+      }
+    }
 
-        const roleMatch = raw.match(/^(?:the )?(?:author|writer|creator|inventor|director|founder|painter|composer|maker|discoverer|owner|president|leader|king|queen|star|actor|actress|singer) of (?:the )?(.+)$/);
-        if (roleMatch) {
-          let inner = roleMatch[1].trim().replace(CATEGORY_RE, '').trim();
-          if (inner && !candidates.includes(inner)) candidates.push(inner);
+    if (candidates.length === 0) {
+      const patterns = [
+        /^who (?:is|was|were|are) (.+)$/,
+        /^what (?:is|was|are|were) (?:a |an |the )?(.+)$/,
+        /^tell me about (.+)$/,
+        /^do you know (?:about |who |what )?(.+)$/,
+        /^how (?:does|do|big|small|tall|long|fast) (?:a |an |the |is |are )?(.+)$/,
+        /^why (?:does|do|is|are|did) (.+)$/,
+        /^where (?:is|are|was|were) (.+)$/,
+        /^when (?:was|is|did) (.+)$/,
+        /^explain (?:to me )?(.+)$/,
+        /^who (?:wrote|invented|made|created|discovered|founded|painted|composed|directed|starred in) (.+)$/,
+      ];
+
+      for (const p of patterns) {
+        const m = text.match(p);
+        if (m) {
+          let raw = m[1].trim().replace(/\s*\b(please|to me|for me)\b\s*$/g, '').trim();
+          if (!raw) continue;
+          candidates.push(raw);
+
+          const stripped = raw.replace(/^(?:a |an |the )/, '').trim();
+          if (stripped && stripped !== raw) candidates.push(stripped);
+
+          const noCategory = raw.replace(CATEGORY_RE, '').trim();
+          if (noCategory && noCategory !== raw && !candidates.includes(noCategory)) {
+            candidates.push(noCategory);
+          }
+
+          const roleMatch = raw.match(/^(?:the )?(?:author|writer|creator|inventor|director|founder|painter|composer|maker|discoverer|owner|president|leader|king|queen|star|actor|actress|singer) of (?:the )?(.+)$/);
+          if (roleMatch) {
+            let inner = roleMatch[1].trim().replace(CATEGORY_RE, '').trim();
+            if (inner && !candidates.includes(inner)) candidates.push(inner);
+          }
+          break;
         }
-        break;
       }
     }
 
